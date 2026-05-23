@@ -66,12 +66,70 @@ inner join commandes cd on cl.id = cd.client_id
 inner join produits_commande pc on cd.id = pc.commande_id
 group by 1,2
 
-select
-cl.nom,
-count(distinct cd.id) as cmd,
-sum(cd.montant) as montant_total
+-- Requête avec la sous-requête dans le Select
+select 
+	cl.id,
+	sum(cm.montant) as montant_total,
+	(select avg(montant) from commandes) as montant_moyen,
+	sum(cm.montant) - (select avg(montant) from commandes) as difference
 from clients cl
-inner join commandes cd on cl.id = cd.client_id
-inner join produits_commande pc on cd.id = pc.commande_id
-group by 1
-having sum(cd.montant) > 200 and count(distinct cd.id) >= 2
+inner join commandes cm on cl.id = cm.client_id
+group by cl.id
+
+
+-- Requête avec la sous-requete dans le from
+select 
+	cl.id,
+from clients cl
+inner join commandes cm on cl.id = cm.client_id
+group by cl.id
+
+
+-- Utilisation du cross join afin d'établir un produit cartésien.
+-- Cela signifie que la colonne batie par le cross join verra sa valeur attribuée à chaque ligne.
+select 
+	cl.id,
+	round(moyenne.montant_moyen) as avg_amount,
+	sum(cm.montant) as montant_total,
+	sum(cm.montant) - (select avg(montant) from commandes) as difference
+from clients cl
+inner join commandes cm on cl.id = cm.client_id
+cross join (select avg(montant) as montant_moyen from commandes) as moyenne
+group by 1,2;
+
+-- Modèle de sous-requête corrélée.
+-- Tout se joue au niveau du where à l'intérieur de la sous-requête
+-- Par convention on met la colonne de la table référencée (dans le where) en premier.
+select
+cl.id,
+(select max(montant) from commandes where client_id = cl.id) as max_com_mont,
+(select min(montant) from commandes where client_id = cl.id) as min_com_mont
+from clients cl;
+
+-- Utilisation d'un union pour fusionner les deux tables client et produit_commandes
+-- par leurs colonnes de nom clients et nom produit.
+-- l'union se met entre les deux tables. (un union all prend également en compte les doublons)
+
+select c.nom,
+'Client' as type
+from clients c 
+union
+select pc.produit_nom,
+'Produit' as type
+from produits_commande pc
+order by 1;
+
+-- Window function : permet au contraire du groupe by de conserver toutes les lignes et d'ajouter une nouvelle colonne
+-- Exemple ci-dessous : on peut voir le cumul dans la colonne "total"
+-- Syntaxe de la WF : fonction agg over(partition by .... order by ....) as 
+-- Row_number() permet d'attribuer un numéro de ligne. Syntaxe : row_number () over(order by)
+-- elle existe aussi avec partition : row_number() over(partition by ... order by ...). Rang par la colonne partitionnée
+
+select
+c.nom,
+c2.montant,
+c2.date_commande,
+sum(montant) over(partition by c.nom order by c2.date_commande) as total_montant,
+row_number() over(partition by c.nom order by c2.date_commande) as rank
+from clients c 
+inner join commandes c2 on c.id = c2.client_id 
