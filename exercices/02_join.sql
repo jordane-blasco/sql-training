@@ -133,3 +133,78 @@ sum(montant) over(partition by c.nom order by c2.date_commande) as total_montant
 row_number() over(partition by c.nom order by c2.date_commande) as rank
 from clients c 
 inner join commandes c2 on c.id = c2.client_id 
+
+
+/*
+Écris une requête qui retourne :
+
+Le nom du client
+Le montant de chaque commande
+Le montant moyen de toutes les commandes de ce client
+La différence entre le montant de cette commande et la moyenne du client
+*/
+
+select 
+c.nom,
+cmd.montant  as order_amount,
+avg(cmd.montant) over (partition by c.nom ) as order_mean,
+cmd.montant - avg(cmd.montant) over (partition by  c.nom ) as difference
+from clients c
+inner join commandes cmd on c.id = cmd.client_id;
+
+/*
+Écris une requête qui retourne :
+
+Le nom du client
+Le montant de chaque commande
+Le rang de cette commande pour le client (1ère, 2ème, etc.), classée par montant décroissant
+Le montant de la commande précédente (la plus proche avant celle-ci, si elle existe)
+*/
+
+select
+c.nom,
+cmd.montant,
+row_number() over(partition by c.nom order by cmd.montant desc) as rang,
+lag(cmd.montant) over(partition by c.nom order by cmd.montant desc) as valeur_precedente
+from clients c
+inner join commandes cmd on c.id = cmd.client_id 
+
+/*
+Exercice 7D — Window Functions (RANK vs ROW_NUMBER)
+Écris une requête qui retourne :
+
+Le nom du client
+Le montant de chaque commande
+Deux colonnes : une avec RANK() et une avec ROW_NUMBER(), les deux triées par montant décroissant
+
+Résultat attendu : Observe la différence entre RANK() et ROW_NUMBER().
+
+*/
+
+select
+c.nom,
+cmd.montant,
+rank() over(partition by c.nom order by cmd.montant desc),
+row_number() over(partition by c.nom order by cmd.montant desc)
+from clients c
+inner join commandes cmd on c.id = cmd.client_id
+
+/*
+Exercice 7E — Window Functions avec DENSE_RANK()
+Écris une requête qui retourne :
+
+Le nom du client
+Le montant de chaque commande
+RANK(), ROW_NUMBER(), et DENSE_RANK() — tous trois triés par montant décroissant
+
+Résultat attendu : Observe comment DENSE_RANK() se différencie des deux autres.
+
+*/
+select
+c.nom,
+cmd.montant,
+rank() over(partition by c.nom order by cmd.montant desc),
+row_number() over(partition by c.nom order by cmd.montant desc),
+dense_rank() over(partition by c.nom order by cmd.montant desc)
+from clients c
+inner join commandes cmd on c.id = cmd.client_id
