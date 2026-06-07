@@ -334,3 +334,145 @@ GROUP BY  vendeur
          ,ville_vendeur
 ORDER BY  nbr_commandes DESC
 LIMIT 10;
+
+
+/*
+Exercice 12 — Analyse temporelle
+Affiche le CA mensuel sur toute la période disponible, avec :
+
+l'année
+le mois
+le nombre de commandes
+le CA total (arrondi)
+la variation du CA par rapport au mois précédent (arrondie)
+
+Trié par année et mois croissants.
+*/
+
+WITH table_ca AS
+(
+	SELECT  extract(year
+	FROM o.order_purchase_timestamp) AS annee, extract(month
+	FROM o.order_purchase_timestamp) AS mois, COUNT(o.order_id) AS nbr_commandes, round(SUM(op.payment_value)) AS montant
+	FROM orders o
+	INNER JOIN order_payments op
+	ON o.order_id = op.order_id
+	GROUP BY  1
+	         ,2
+)
+SELECT  *
+       ,montant - lag(montant,1,0) OVER (order by annee,mois) AS difference_month_before
+FROM table_ca
+ORDER BY 1, 2;
+
+
+/*
+Exercice 13 — Ranking par catégorie
+Pour chaque catégorie de produit, affiche :
+
+le nom de la catégorie en anglais
+le CA total (arrondi)
+le rang de la catégorie par CA décroissant
+
+Trié par rang croissant.
+La table category_translation te sera utile.
+*/
+SELECT  ct.product_category_name_english                 AS category_name
+       ,SUM(op.payment_value)                            AS montant
+       ,rank() over(order by SUM(op.payment_value) DESC) AS rang
+FROM products p
+LEFT JOIN category_translation ct
+ON p.product_category_name = ct.product_category_name -- capturer si des product_id n'ont pas de catégorie 
+LEFT JOIN order_items oi
+ON p.product_id = oi.product_id --
+LEFT JOIN ici car
+ON tous les product_id dans products non pas forcément de valeur dans order_items 
+LEFT JOIN order_payments op
+ON oi.order_id = op.order_id --
+LEFT JOIN ici car
+ON veut conserver les lignes des deux
+LEFT JOIN précédents 
+GROUP BY  1;
+
+/*
+Exercice 14 — Top 3 des vendeurs par état
+Pour chaque état du vendeur, affiche les 3 meilleurs vendeurs par CA, avec :
+
+l'état
+l'identifiant du vendeur
+le CA total (arrondi)
+leur rang dans l'état
+
+Trié par état, puis rang croissant.
+Indice : tu auras besoin d'une window function avec PARTITION BY, et d'un moyen de filtrer sur le rang dans un second temps.
+*/
+
+WITH eval_rank AS
+(
+	SELECT  s.seller_state                                                                AS etat_vendeur
+	       ,s.seller_id                                                                   AS id_vendeur
+	       ,round(SUM(op.payment_value))                                                  AS montant
+	       ,rank() over(PARTITION BY s.seller_state ORDER BY  SUM(op.payment_value) DESC) AS rank_ca
+	FROM sellers s
+	INNER JOIN order_items oi
+	ON s.seller_id = oi.seller_id
+	INNER JOIN order_payments op
+	ON oi.order_id = op.order_id
+	GROUP BY  1
+	         ,2
+	ORDER BY  1
+	         ,4
+)
+SELECT  *
+FROM eval_rank
+WHERE rank_ca <= 3 /* */
+-- création de la 1ere cte afin d'avoir une "base" générale 
+ 
+/*
+Exercice 15 — Cohortes clients
+Pour chaque mois d'acquisition (le mois de leur première commande), affiche :
+
+l'année et le mois d'acquisition
+le nombre de nouveaux clients acquis ce mois-là
+le CA total généré par ces clients sur l'ensemble de leur vie (pas uniquement le mois d'acquisition)
+
+Trié par année et mois croissants.
+Indice : tu auras besoin d'identifier pour chaque client sa première commande, puis de relier ces clients à toutes leurs commandes.
+*/
+
+-- création de la 1ere cte afin d'avoir une "base" générale
+WITH request_basis AS (
+SELECT  
+extract(year FROM order_purchase_timestamp) AS annee, 
+extract(month FROM order_purchase_timestamp) AS mois, 
+--extract(epoch FROM order_purchase_timestamp) AS epoch, 
+customer_id AS client_id, 
+SUM(op.payment_value) AS montant
+FROM orders o
+LEFT JOIN order_payments op
+ON o.order_id = op.order_id -- utilisation du LEFT JOIN car tous les order_id n'ont pas de valeur payment_value 
+GROUP BY  1
+         ,2
+         ,3 ORDER BY  1
+         ,2 )
+         ,rang_commande AS
+(
+	-- identifions la première commande des clients 
+	SELECT  *
+	       ,ROW_NUMBER() over(PARTITION BY client_id ORDER BY  annee,mois) AS rang_commande
+	FROM request_basis
+	ORDER BY annee, mois
+)
+-- TABLE finale 
+SELECT  rc.annee
+       ,rc.mois
+       ,COUNT(rc.client_id)    AS nbr_clients_acquis
+       ,round(SUM(rb.montant)) AS montant_total
+FROM rang_commande rc
+INNER JOIN request_basis rb
+ON rc.client_id = rb.client_id
+WHERE rc.rang_commande = 1
+GROUP BY  1
+         ,2
+ORDER BY  1
+         ,2;
