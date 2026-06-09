@@ -453,9 +453,8 @@ LEFT JOIN order_payments op
 ON o.order_id = op.order_id -- utilisation du LEFT JOIN car tous les order_id n'ont pas de valeur payment_value 
 GROUP BY  1
          ,2
-         ,3 ORDER BY  1
-         ,2 )
-         ,rang_commande AS
+         ,3 ORDER BY  1,2 )
+,rang_commande AS
 (
 	-- identifions la première commande des clients 
 	SELECT  *
@@ -476,3 +475,216 @@ GROUP BY  1
          ,2
 ORDER BY  1
          ,2;
+
+/*
+Exercice 16 — Rétention à M+1
+En repartant de la logique de cohorte, affiche pour chaque mois d'acquisition le nombre de clients qui ont passé au moins une commande le mois suivant (M+1).
+Résultat attendu :
+
+l'année et le mois d'acquisition
+le nombre de clients acquis ce mois-là
+le nombre de ces clients qui ont recommandé en M+1
+
+Trié par année et mois croissants.
+*/
+
+
+-- cte d'acquision de la 1ere commande
+WITH data_base AS
+(
+	SELECT  extract(year
+	FROM o.order_purchase_timestamp) AS year, extract(month
+	FROM o.order_purchase_timestamp) AS month, o.order_purchase_timestamp AS timestamp, o.order_id AS commande, c.customer_unique_id AS client_id
+	--count(distinct o.customer_id) AS clients_uniques 
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	WHERE o.order_status = 'delivered'
+	ORDER BY year, month 
+), rang_commande AS
+(
+	SELECT  year
+	       ,month
+	       ,timestamp
+	       ,client_id
+	       ,ROW_NUMBER() over(PARTITION BY client_id ORDER BY  year,month) AS rang
+	FROM data_base
+	ORDER BY 1, 2, 3, 4
+), table_all_orders AS
+(
+	SELECT  year
+	       ,month
+	       ,date_trunc('month',timestamp) + interval '1 month' AS month_plus_1
+	       ,rang
+	       ,client_id
+	FROM rang_commande
+	WHERE rang = 1 
+), table_month_plus AS
+(
+	SELECT  year
+	       ,month
+	       ,client_id
+	       ,date_trunc('month',timestamp) AS current_month
+	FROM data_base
+	GROUP BY  1
+	         ,2
+	         ,3
+	         ,4
+)
+SELECT  ftc.year
+       ,ftc.month
+       ,COUNT(distinct ftc.client_id) AS acquisition
+       ,COUNT(distinct ftm.client_id) AS month_plus
+FROM table_all_orders ftc
+LEFT JOIN table_month_plus ftm
+ON ftm.current_month = ftc.month_plus_1 AND ftm.client_id = ftc.client_id
+GROUP BY  1
+         ,2
+;
+
+/*
+La requête s'est construite en plusieurs étapes :
+1. data_base — la fondation. Tu récupères toutes les commandes delivered avec leur date, leur order_id et customer_unique_id (après correction du problème Olist).
+2. rang_commande — tu appliques ROW_NUMBER() OVER(PARTITION BY client_id ORDER BY year, month) pour numéroter les commandes de chaque client par ordre chronologique.
+3. table_all_orders — tu filtres sur rang = 1 pour n'avoir que les premières commandes (mois d'acquisition), et tu calcules DATE_TRUNC('month', timestamp) + INTERVAL '1 month' pour obtenir le mois M+1 cible de chaque client.
+4. table_month_plus — tu reprends data_base avec toutes les commandes et tu tronques leur date au mois avec DATE_TRUNC. C'est la table qui te dit "ce client a été actif ce mois-là".
+5. SELECT final — tu jointures les deux tables sur deux conditions : current_month = month_plus_1 ET client_id = client_id. Ainsi tu ne récupères que les clients acquis en M qui ont aussi commandé en M+1. Tu agrèges avec COUNT(DISTINCT client_id) pour obtenir les deux métriques.
+Le point clé de cet exercice : la jointure sur deux colonnes simultanément est ce qui garantit qu'on compte uniquement les bons clients, pas tous les actifs du mois.
+*/
+
+
+/*
+Exercice 17 — Taux de rétention M+1
+Repars de la requête de l'exercice 16 et ajoute une colonne taux de rétention exprimée en pourcentage, arrondie à 2 décimales.
+Exemple : si 750 clients ont été acquis en janvier 2017 et 2 ont recommandé en M+1, le taux est 2 / 750 * 100 = 0.27%.
+*/
+
+
+-- cte d'acquision de la 1ere commande
+WITH data_base AS (
+SELECT  extract(year
+FROM o.order_purchase_timestamp) AS year, extract(month
+FROM o.order_purchase_timestamp) AS month, o.order_purchase_timestamp AS timestamp, o.order_id AS commande, c.customer_unique_id AS client_id
+--count(distinct o.customer_id) AS clients_uniques 
+FROM orders o
+INNER JOIN customers c
+ON o.customer_id = c.customer_id
+WHERE o.order_status = 'delivered'
+ORDER BY year,month ), rang_commande AS (
+SELECT  year
+       ,month
+       ,timestamp
+       ,client_id
+       ,ROW_NUMBER() over(PARTITION BY client_id ORDER BY  year,month) AS rang
+FROM data_base ORDER BY 1,2,3,4 ), table_all_orders AS (
+SELECT  year
+       ,month
+       ,date_trunc('month',timestamp) + interval '1 month' AS month_plus_1
+       ,rang
+       ,client_id
+FROM rang_commande
+WHERE rang = 1 ), table_month_plus AS (
+SELECT  year
+       ,month
+       ,client_id
+       ,date_trunc('month',timestamp) AS current_month
+FROM data_base
+GROUP BY  1
+         ,2
+         ,3
+         ,4 )
+SELECT  ftc.year
+       ,ftc.month
+       ,COUNT(distinct ftc.client_id)                                                                AS acquisition
+       ,COUNT(distinct ftm.client_id)                                                                AS month_plus
+       ,round(cast(COUNT(distinct ftm.client_id) AS numeric)/ COUNT(distinct ftc.client_id),4) * 100 AS retention_rate
+FROM table_all_orders ftc
+LEFT JOIN table_month_plus ftm
+ON ftm.current_month = ftc.month_plus_1 AND ftm.client_id = ftc.client_id
+GROUP BY  1
+         ,2;
+
+-- Ici on a du "caster" via la fonction cast() car count() renvoie un bigint et donc la division de deux chiffres
+-- entiers renvoie un chiffre entier. Appliquer cast([colonne ou valeur] as numeric) sur une seule de ces valeurs va renvoyer
+-- un chiffre décimal. On applique un round() pour ne pas avoir un % à rallonge
+
+
+
+/*
+Exercice 18 — Revenu cumulé par cohorte
+Repars de la logique de cohorte. Pour chaque mois d'acquisition, affiche le revenu total généré mois par mois depuis l'acquisition, avec :
+
+le mois d'acquisition
+le nombre de mois écoulés depuis l'acquisition (0 = mois d'acquisition, 1 = M+1, 2 = M+2, etc.)
+le CA généré par la cohorte ce mois-là
+le CA cumulé depuis l'acquisition
+
+Trié par mois d'acquisition, puis nombre de mois écoulés.
+*/
+
+--création de la TABLE cte de base
+WITH data_base AS
+(
+	SELECT  extract('year'
+	FROM o.order_purchase_timestamp) AS annee, extract('month'
+	FROM o.order_purchase_timestamp) AS mois, o.order_purchase_timestamp AS timestamp, c.customer_unique_id AS client_id, o.order_id AS commandes, op.payment_value AS montant
+	FROM orders o
+	INNER JOIN order_payments op
+	ON o.order_id = op.order_id
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	ORDER BY 1, 2
+), rang_window AS
+(
+	SELECT  *
+	       ,ROW_NUMBER() over(PARTITION BY client_id ORDER BY  annee,mois) AS rang
+	FROM data_base
+), cte_mois_acquisition AS
+(
+	SELECT  *
+	FROM rang_window
+	WHERE rang = 1 
+), mois_ecoules as(
+SELECT  cma.annee  AS acquisition_annee
+       ,cma.mois   AS acquisition_mois
+       ,db.montant AS acquisition_montant
+       ,(extract('year'
+FROM age
+(db.timestamp, cma.timestamp
+))*12) + extract('month'
+FROM age
+(db.timestamp, cma.timestamp
+)) AS mois_ecoules
+FROM cte_mois_acquisition cma
+LEFT JOIN data_base db
+ON cma.client_id = db.client_id ), ca_par_mois AS
+(
+	SELECT  acquisition_annee
+	       ,acquisition_mois
+	       ,mois_ecoules             AS mois_depuis_acquisition
+	       ,SUM(acquisition_montant) AS montant_mois
+	FROM mois_ecoules
+	GROUP BY  1
+	         ,2
+	         ,3
+	ORDER BY  1
+	         ,2
+)
+SELECT  *
+       ,SUM(montant_mois) over(PARTITION BY acquisition_annee,acquisition_mois ORDER BY  mois_depuis_acquisition ) AS CA_cumule
+FROM ca_par_mois
+ORDER BY acquisition_annee, acquisition_mois
+
+/*
+Ex 16 : rétention M+1 — double jointure sur client_id ET mois, DATE_TRUNC + INTERVAL, problème customer_id vs customer_unique_id dans Olist
+Ex 17 : taux de rétention — division décimale avec CAST, ordre du calcul month_plus / acquisition * 100
+Ex 18 : revenu cumulé par cohorte — AGE() pour calculer les mois écoulés, SUM() OVER(PARTITION BY cohorte ORDER BY mois_ecoules) pour le cumulatif, nécessité d'une CTE intermédiaire avant d'appliquer la window function
+
+Point récurrent : les window functions ne peuvent pas être appliquées sur des colonnes déjà agrégées dans la même requête — il faut passer par une CTE.
+*/
+
+
+
+
+
+
