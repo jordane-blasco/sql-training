@@ -648,13 +648,8 @@ WITH data_base AS
 SELECT  cma.annee  AS acquisition_annee
        ,cma.mois   AS acquisition_mois
        ,db.montant AS acquisition_montant
-       ,(extract('year'
-FROM age
-(db.timestamp, cma.timestamp
-))*12) + extract('month'
-FROM age
-(db.timestamp, cma.timestamp
-)) AS mois_ecoules
+       ,(extract('year'FROM age(db.timestamp, cma.timestamp))*12) + 
+       extract('month' FROM age (db.timestamp, cma.timestamp)) AS mois_ecoules
 FROM cte_mois_acquisition cma
 LEFT JOIN data_base db
 ON cma.client_id = db.client_id ), ca_par_mois AS
@@ -682,6 +677,230 @@ Ex 18 : revenu cumulé par cohorte — AGE() pour calculer les mois écoulés, S
 
 Point récurrent : les window functions ne peuvent pas être appliquées sur des colonnes déjà agrégées dans la même requête — il faut passer par une CTE.
 */
+
+/*
+Exercice 19 — Taille et revenu moyen par cohorte
+Définis la cohorte d'un client par le mois de sa première commande (via customer_unique_id).
+Objectif : pour chaque cohorte, afficher :
+
+le mois de cohorte
+le nombre de clients dans cette cohorte
+le revenu total généré par ces clients sur l'ensemble de leur vie (lifetime revenue)
+le revenu moyen par client
+
+Trie par mois de cohorte croissant.
+*/
+
+WITH cte_db AS
+(
+	SELECT  extract('year'
+	FROM o.order_purchase_timestamp) AS annee, extract('month'from o.order_purchase_timestamp) AS mois, c.customer_unique_id AS client_unique, o.order_id AS commande, SUM(op.payment_value) AS montant, o.order_purchase_timestamp AS timestamp
+	FROM orders o
+	INNER JOIN order_payments op
+	ON o.order_id = op.order_id
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	GROUP BY  1
+	         ,2
+	         ,3
+	         ,4
+	         ,6
+	ORDER BY  1
+	         ,2
+), rang_commande AS
+(
+	SELECT  *
+	       ,ROW_NUMBER() over(PARTITION BY client_unique ORDER BY  annee,mois) AS rang
+	FROM cte_db
+	ORDER BY 1, 2
+), acquisition AS
+(
+	SELECT  *
+	FROM rang_commande
+	WHERE rang = 1 
+), final_cte AS
+(
+	SELECT  a.annee
+	       ,a.mois
+	       ,a.client_unique
+	       ,a.timestamp
+	       ,a.commande
+	       ,db.montant
+	FROM acquisition a
+	INNER JOIN cte_db db
+	ON a.client_unique = db.client_unique
+)
+SELECT  annee
+       ,mois
+       ,COUNT(distinct client_unique)                         AS nbr_clients
+       ,SUM(montant)                                          AS ca_total
+       ,round(SUM(montant) / COUNT(distinct client_unique),1) AS revenu_moyen
+FROM final_cte
+GROUP BY  1
+         ,2
+ORDER BY  1
+         ,2
+
+/*
+
+*/
+
+
+-- 20
+WITH cte_db AS
+(
+	SELECT  extract('year'
+	FROM o.order_purchase_timestamp) AS annee, extract('month'from o.order_purchase_timestamp) AS mois, c.customer_unique_id AS client_unique, o.order_id AS commande, SUM(op.payment_value) AS montant, o.order_purchase_timestamp AS timestamp
+	FROM orders o
+	INNER JOIN order_payments op
+	ON o.order_id = op.order_id
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	GROUP BY  1
+	         ,2
+	         ,3
+	         ,4
+	         ,6
+	ORDER BY  1
+	         ,2
+), rang_commande AS
+(
+	SELECT  *
+	       ,ROW_NUMBER() over(PARTITION BY client_unique ORDER BY  annee,mois) AS rang
+	FROM cte_db
+	ORDER BY 1, 2
+), acquisition AS
+(
+	SELECT  *
+	FROM rang_commande
+	WHERE rang = 1 
+), final_cte AS
+(
+	SELECT  a.annee
+	       ,a.mois
+	       ,a.client_unique
+	       ,a.timestamp
+	       ,a.commande
+	       ,db.montant
+	       ,(extract('year'
+	FROM age
+	(db.timestamp, a.timestamp
+	))*12) + extract('month'
+	FROM age
+	(db.timestamp, a.timestamp
+	)) AS mois_écoulés
+	FROM acquisition a
+	INNER JOIN cte_db db
+	ON a.client_unique = db.client_unique
+)
+SELECT  annee
+       ,mois
+       ,mois_écoulés
+       ,COUNT(distinct client_unique)                         AS nbr_clients
+       ,SUM(montant)                                          AS ca_total
+       ,round(SUM(montant) / COUNT(distinct client_unique),1) AS revenu_moyen
+FROM final_cte
+GROUP BY  1
+         ,2
+         ,3
+ORDER BY  1
+         ,2
+
+/*
+Exercice 21 — Taux de rétention cumulatif par cohorte
+Repars de la même logique. Cette fois, pour chaque cohorte et chaque mois écoulé, calcule le taux de rétention — c'est-à-dire le pourcentage de clients de la cohorte initiale qui sont encore actifs à ce mois-là.
+Pour être clair :
+
+Au mois 0, le taux est toujours 100%
+Au mois 1, si 321 clients ont été acquis et 45 ont repassé commande, le taux est 45/321 = 14%
+etc.
+
+Affiche :
+
+le mois de cohorte
+le mois écoulé
+le nombre de clients actifs ce mois-là
+la taille initiale de la cohorte (nombre de clients au mois 0)
+le taux de rétention en %
+
+Trie par cohorte et mois écoulés.
+*/
+
+	WITH cte_db AS
+(
+	SELECT  extract('year'
+	FROM o.order_purchase_timestamp) AS annee, extract('month'from o.order_purchase_timestamp) AS mois, c.customer_unique_id AS client_unique, o.order_id AS commande, SUM(op.payment_value) AS montant, o.order_purchase_timestamp AS timestamp
+	FROM orders o
+	INNER JOIN order_payments op
+	ON o.order_id = op.order_id
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	GROUP BY  1
+	         ,2
+	         ,3
+	         ,4
+	         ,6
+	ORDER BY  1
+	         ,2
+), rang_commande AS
+(
+	SELECT  *
+	       ,ROW_NUMBER() over(PARTITION BY client_unique ORDER BY  annee,mois) AS rang
+	FROM cte_db
+	ORDER BY 1, 2
+), acquisition AS
+(
+	SELECT  *
+	FROM rang_commande
+	WHERE rang = 1 
+), final_cte AS
+(
+	SELECT  a.annee
+	       ,a.mois
+	       ,a.client_unique
+	       ,a.timestamp
+	       ,a.commande
+	       ,db.montant
+	       ,(extract('year'
+	FROM age
+	(db.timestamp, a.timestamp
+	))*12) + extract('month'
+	FROM age
+	(db.timestamp, a.timestamp
+	)) AS mois_écoulés
+	FROM acquisition a
+	INNER JOIN cte_db db
+	ON a.client_unique = db.client_unique
+), final_db AS
+(
+	SELECT  annee
+	       ,mois
+	       ,mois_écoulés
+	       ,COUNT(distinct client_unique)                         AS nbr_clients
+	       ,SUM(montant)                                          AS ca_total
+	       ,round(SUM(montant) / COUNT(distinct client_unique),1) AS revenu_moyen
+	FROM final_cte
+	GROUP BY  1
+	         ,2
+	         ,3
+	ORDER BY  1
+	         ,2
+), taille_cohorte AS
+(
+	SELECT  fdb.annee
+	       ,fdb.mois
+	       ,fdb.mois_écoulés
+	       ,fdb.nbr_clients
+	       ,MAX(CASE WHEN mois_écoulés = 0 THEN nbr_clients END) OVER (PARTITION BY annee,mois) AS taille_cohorte
+	       ,fdb.ca_total
+	       ,fdb.revenu_moyen
+	FROM final_db fdb
+)
+SELECT  *
+       ,round((cast(nbr_clients AS numeric) / taille_cohorte),4) * 100 AS retention_rate
+FROM taille_cohorte
+	
+
 
 
 
