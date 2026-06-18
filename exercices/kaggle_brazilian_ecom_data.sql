@@ -861,13 +861,8 @@ Trie par cohorte et mois écoulés.
 	       ,a.timestamp
 	       ,a.commande
 	       ,db.montant
-	       ,(extract('year'
-	FROM age
-	(db.timestamp, a.timestamp
-	))*12) + extract('month'
-	FROM age
-	(db.timestamp, a.timestamp
-	)) AS mois_écoulés
+	       ,(extract('year'	FROM age(db.timestamp, a.timestamp))*12) 
+           + extract('month'FROM age(db.timestamp, a.timestamp)) AS mois_écoulés
 	FROM acquisition a
 	INNER JOIN cte_db db
 	ON a.client_unique = db.client_unique
@@ -886,7 +881,7 @@ Trie par cohorte et mois écoulés.
 	ORDER BY  1
 	         ,2
 ), taille_cohorte AS
-(
+(  
 	SELECT  fdb.annee
 	       ,fdb.mois
 	       ,fdb.mois_écoulés
@@ -899,6 +894,156 @@ Trie par cohorte et mois écoulés.
 SELECT  *
        ,round((cast(nbr_clients AS numeric) / taille_cohorte),4) * 100 AS retention_rate
 FROM taille_cohorte
+
+/*
+Exercice 22 — la suite logique : generate_series()
+L'idée : générer une série complète de mois (même ceux sans données), puis faire un LEFT JOIN avec tes données réelles pour que les mois vides apparaissent avec des zéros plutôt que d'être absents.
+
+*/
+
+WITH cte_basis AS
+(
+	SELECT  date_trunc('month',o.order_purchase_timestamp) AS mois_cohorte
+	       ,c.customer_unique_id                           AS client_id
+	       ,o.order_id                                     AS commande
+	       ,o.order_purchase_timestamp                     AS timestamp
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+), rang_commande AS
+(
+	SELECT  *
+	       ,rank() over(PARTITION BY client_id ORDER BY  mois_cohorte) AS rang
+	FROM cte_basis
+), commande_une AS
+(
+	SELECT  *
+	FROM rang_commande
+	WHERE rang = 1 
+), mois_ecoules AS
+(
+	SELECT  cu.mois_cohorte AS mois_cohorte_acquisition
+	       ,cu.client_id    AS client_id_acquisition
+	       ,cu.commande     AS cmd_acquisition
+	       ,cu.timestamp    AS tmp_acquisition
+	       ,cb.timestamp    AS tmp_toutes_cmd
+	       ,(extract('year'	FROM age(cb.timestamp, cu.timestamp	))*12) + extract('month'FROM age(cb.timestamp, cu.timestamp
+	)) AS mois_écoulés
+	FROM commande_une cu
+	INNER JOIN cte_basis cb
+	ON cu.client_id = cb.client_id
+), full_mois_ecoules AS
+(
+	SELECT  distinct mois_cohorte_acquisition
+	       ,s.mois AS mois
+	FROM mois_ecoules
+	CROSS JOIN generate_series
+	(0, 11, 1
+	) AS s(mois)
+	ORDER BY 1, 2
+)
+SELECT  fme.mois_cohorte_acquisition             AS mois_cohorte
+       ,fme.mois                                 AS mois_écoulés
+       ,COUNT(distinct me.client_id_acquisition) AS nbr_clients
+       ,COUNT(distinct me.cmd_acquisition)       AS nbr_commandes
+FROM full_mois_ecoules fme  
+LEFT JOIN mois_ecoules me
+ON fme.mois_cohorte_acquisition = me.mois_cohorte_acquisition AND fme.mois = me.mois_écoulés
+WHERE fme.mois_cohorte_acquisition IN ( SELECT mois_cohorte_acquisition FROM mois_ecoules WHERE mois_écoulés = 0 GROUP BY 1 HAVING COUNT(distinct cmd_acquisition) > 50 )
+GROUP BY  1
+         ,2
+
+/*
+Exercice 23
+On reste sur l'analyse de cohortes, mais on change d'angle.
+Objectif : Calcule le taux de rétention par cohorte et par mois écoulé, en t'assurant que les mois sans activité affichent 0% plutôt que d'être absents.
+Colonnes attendues :
+
+mois_cohorte
+mois_ecoulés (0 à 11)
+nbr_clients
+taux_retention (en %, arrondi à 2 décimales)
+
+Contraintes :
+
+Ne garde que les cohortes avec 50+ clients en mois 0
+Le taux de rétention = clients actifs au mois N / clients en mois 0
+Le mois 0 doit afficher 100%
+*/
+
+WITH cte_basis AS
+(
+	SELECT  date_trunc('month',o.order_purchase_timestamp) AS mois_cohorte
+	       ,c.customer_unique_id                           AS client_id
+	       ,o.order_id                                     AS commande
+	       ,o.order_purchase_timestamp                     AS timestamp
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+), rang_commande AS
+(
+	SELECT  *
+	       ,rank() over(PARTITION BY client_id ORDER BY  mois_cohorte) AS rang
+	FROM cte_basis
+), commande_une AS
+(
+	SELECT  *
+	FROM rang_commande
+	WHERE rang = 1 
+), group_cte AS
+(
+	SELECT  cu.mois_cohorte
+	       ,cu.client_id
+	       ,cu.commande
+	       ,cu.timestamp
+	       ,(extract('year'
+	FROM age
+	(cb.timestamp, cu.timestamp
+	))*12) + extract('month'
+	FROM age
+	(cb.timestamp, cu.timestamp
+	)) AS mois_ecoules
+	FROM commande_une cu
+	INNER JOIN cte_basis cb
+	ON cu.client_id = cb.client_id
+), mois_generate AS
+(
+	SELECT  distinct mois_cohorte
+	       ,s.mois AS mois
+	FROM group_cte
+	CROSS JOIN generate_series
+	(0, 11, 1
+	) AS s(mois)
+	ORDER BY 1, 2
+), group_cohorte AS
+(
+	SELECT  mg.mois_cohorte
+	       ,mg.mois
+	       ,COUNT(distinct gc.client_id) AS nbr_clients
+	FROM mois_generate mg
+	LEFT JOIN group_cte gc
+	ON mg.mois_cohorte = gc.mois_cohorte AND mg.mois = gc.mois_ecoules
+	GROUP BY  1
+	         ,2
+	ORDER BY  1
+	         ,2
+), propagation_mois AS
+(
+	SELECT  *
+	       ,MAX(case WHEN mois = 0 THEN nbr_clients end) over(PARTITION BY mois_cohorte) AS max_retention
+	FROM group_cohorte gch
+), retention_rate as(
+SELECT  *
+       ,round((cast(nbr_clients AS numeric)/max_retention),4) * 100 AS retention_rate
+FROM propagation_mois )
+SELECT  mois_cohorte
+       ,mois
+       ,nbr_clients
+       ,retention_rate
+FROM retention_rate
+WHERE mois_cohorte IN ( SELECT mois_cohorte FROM group_cohorte WHERE mois = 0 AND nbr_clients > 50 )
+
+
 	
 
 
