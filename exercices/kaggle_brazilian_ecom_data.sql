@@ -1043,6 +1043,104 @@ SELECT  mois_cohorte
 FROM retention_rate
 WHERE mois_cohorte IN ( SELECT mois_cohorte FROM group_cohorte WHERE mois = 0 AND nbr_clients > 50 )
 
+/*
+Exercice 24
+On change de thème — on quitte les cohortes pour travailler sur l'analyse des vendeurs.
+Objectif : Identifie les vendeurs dans le top 25% en termes de chiffre d'affaires, et pour chacun d'eux affiche :
+
+seller_id
+chiffre_affaires (somme des paiements liés à leurs commandes)
+quartile (1, 2, 3 ou 4)
+
+Contraintes :
+
+Ne garde que les vendeurs en quartile 1 (top 25%)
+Utilise une window function pour calculer le quartile
+*/
+
+WITH payments AS
+(
+	SELECT  order_id              AS commande
+	       ,SUM(op.payment_value) AS mtn_commande
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  2 DESC
+), top25 AS
+(
+	SELECT  s.seller_id                                     AS vendeur
+	       ,SUM(p.mtn_commande)                             AS mtn_ca
+	       ,ntile(4) over(order by SUM(p.mtn_commande)desc) AS quartile
+	FROM sellers s
+	INNER JOIN order_items oi
+	ON s.seller_id = oi.seller_id
+	INNER JOIN payments p
+	ON oi.order_id = p.commande
+	GROUP BY  1
+)
+SELECT  *
+FROM top25
+WHERE quartile = 1
+
+/*
+Exercice 25
+On reste sur l'analyse des vendeurs mais on ajoute une dimension temporelle.
+Objectif : Pour chaque vendeur, calcule son chiffre d'affaires mensuel et affiche la variation en % par rapport au mois précédent.
+Colonnes attendues :
+
+seller_id
+mois (ex: 2017-01-01)
+ca_mensuel
+ca_mois_precedent
+variation_pct (arrondi à 2 décimales, en %)
+
+Contraintes :
+
+Ignore les vendeurs sans commandes
+Le premier mois d'un vendeur aura NULL pour ca_mois_precedent et variation_pct — c'est normal
+*/
+
+WITH payments_agg AS
+(
+	SELECT  op.order_id            AS order_id
+	       ,SUM(op.payment_value ) AS montant_commande
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  2 DESC
+), joining_table AS
+(
+	SELECT  date_trunc('month',o.order_purchase_timestamp) AS date
+	       ,s.seller_id                                    AS vendeur
+	       ,pa.montant_commande                            AS mtn_ca
+	FROM sellers s
+	INNER JOIN order_items oi
+	ON s.seller_id = oi.seller_id
+	INNER JOIN payments_agg pa
+	ON oi.order_id = pa.order_id
+	INNER JOIN orders o
+	ON pa.order_id = o.order_id
+	ORDER BY 1
+), grouping_data AS
+(
+	SELECT  vendeur
+	       ,date
+	       ,SUM(mtn_ca) AS mtn_ca
+	FROM joining_table
+	GROUP BY  1
+	         ,2
+), ca_mois_dernier AS
+(
+	SELECT  vendeur
+	       ,date
+	       ,mtn_ca
+	       ,lag(mtn_ca,1,Null) over(PARTITION BY vendeur ORDER BY  date) AS ca_mois_dernier
+	FROM grouping_data
+	ORDER BY vendeur, date
+)
+SELECT  *
+       ,round(((mtn_ca - ca_mois_dernier )/ ca_mois_dernier) * 100,2) AS variation_pct
+FROM ca_mois_dernier
+
+
 
 	
 
