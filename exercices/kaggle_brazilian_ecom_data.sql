@@ -1140,13 +1140,346 @@ SELECT  *
        ,round(((mtn_ca - ca_mois_dernier )/ ca_mois_dernier) * 100,2) AS variation_pct
 FROM ca_mois_dernier
 
+/*
+Exercice 26
+On reste sur l'analyse temporelle mais on change d'angle — on s'intéresse aux catégories de produits.
+Objectif : Pour chaque catégorie de produit, calcule le chiffre d'affaires mensuel et identifie le mois record (CA le plus élevé) pour chaque catégorie.
+Colonnes attendues :
 
+categorie (en anglais, via category_translation)
+mois
+ca_mensuel
+est_record (booléen ou 1/0 — vaut 1 si c'est le mois avec le CA le plus élevé pour cette catégorie)
 
-	
+Contraintes :
 
+Ignore les produits sans catégorie
+Ignore les catégories sans traduction anglaise
 
+*/
 
+WITH payments_agg AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+), cte_data_basis AS
+(
+	SELECT  date_trunc('month',o.order_purchase_timestamp) AS mois_achat
+	       ,ct.product_category_name_english               AS categorie_anglais
+	       ,p.product_id                                   AS product_id
+	       ,o.order_id                                     AS order_id
+	       ,pa.montant_ca                                  AS ca
+	FROM products p
+	INNER JOIN category_translation ct
+	ON p.product_category_name = ct.product_category_name
+	INNER JOIN order_items oi
+	ON p.product_id = oi.product_id
+	INNER JOIN orders o
+	ON oi.order_id = o.order_id
+	INNER JOIN payments_agg pa
+	ON pa.order_id = o.order_id
+), mtn_par_categorie AS
+(
+	SELECT  mois_achat
+	       ,categorie_anglais
+	       ,SUM(ca) AS montant
+	FROM cte_data_basis
+	GROUP BY  1
+	         ,2
+	ORDER BY  1
+	         ,2
+), rang AS
+(
+	SELECT  *
+	       ,rank()over(PARTITION BY categorie_anglais ORDER BY  montant DESC) AS est_record
+	FROM mtn_par_categorie
+)
+SELECT  mois_achat
+       ,categorie_anglais
+       ,montant
+       ,CASE WHEN est_record = 1 THEN 1  ELSE 0 END AS test
+FROM rang
 
+/*
+Variante du rank() pour l'exo 26 avec un boolean + cast directement sur la fonction window rank.
+Morceau de code à changer dans la query globale
+*/
+
+SELECT  *
+       ,rank()over(PARTITION BY categorie_anglais ORDER BY  montant DESC) AS est_record
+FROM mtn_par_categorie
+
+/*
+Exercice 27
+On introduit un nouveau concept : les sous-totaux et totaux avec ROLLUP.
+Objectif : Calcule le chiffre d'affaires par état (customer_state) et par mois, avec une ligne de sous-total par état et une ligne de total général.
+Colonnes attendues :
+
+state (NULL pour le total général)
+mois (NULL pour les sous-totaux par état et le total général)
+ca
+
+Contraintes :
+
+Utilise GROUP BY ROLLUP
+Joins les tables nécessaires pour relier les clients, commandes et paiements
+syntaxe de group by roll up : group by rollup (a,b)
+*/
+WITH payments_agg AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+), table_agg AS
+(
+	SELECT  c.customer_state                               AS province
+	       ,date_trunc('month',o.order_purchase_timestamp) AS mois
+	       ,pa.montant_ca                                  AS montant
+	FROM customers c
+	INNER JOIN orders o
+	ON c.customer_id = o.customer_id
+	INNER JOIN payments_agg pa
+	ON o.order_id = pa.order_id
+)
+SELECT  province
+       ,mois
+       ,SUM(montant) AS ca
+FROM table_agg
+GROUP BY  rollup(province,mois)
+
+/*
+Exercice 28
+On reste sur les agrégations avancées avec un nouveau concept : GROUPING SETS.
+Objectif : Calcule le chiffre d'affaires selon trois axes indépendants en une seule requête :
+
+Par état (customer_state)
+Par mois
+Total général
+
+Colonnes attendues :
+
+state
+mois
+ca
+*/
+WITH payments_agg AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+), table_agg AS
+(
+	SELECT  c.customer_state                               AS province
+	       ,date_trunc('month',o.order_purchase_timestamp) AS mois
+	       ,pa.montant_ca                                  AS montant
+	FROM customers c
+	INNER JOIN orders o
+	ON c.customer_id = o.customer_id
+	INNER JOIN payments_agg pa
+	ON o.order_id = pa.order_id
+)
+SELECT  province
+       ,mois
+       ,SUM(montant) AS ca
+FROM table_agg
+GROUP BY
+GROUPING SETS( (province), (mois), () )
+ORDER BY 1, 2
+-- Pas besoin de mettre 3 dans le order by, les valeurs nulls arrivent en dernier avec PostgreSQL 
+
+/*
+Exercice 29
+On introduit un nouveau concept : les vues (VIEW).
+Objectif : Crée une vue appelée vue_ca_mensuel_vendeur qui encapsule le calcul du CA mensuel par vendeur (ce que tu as fait en exercice 25, sans le LAG et la variation).
+Ensuite, utilise cette vue dans une requête séparée pour afficher uniquement les vendeurs dont le CA mensuel dépasse 10 000€ sur au moins un mois.
+Ce qu'est une vue :
+Une vue est une requête sauvegardée dans la base de données sous forme d'objet réutilisable. Tu peux l'interroger comme une table normale avec SELECT * FROM ma_vue.
+*/
+
+CREATE view vue_ca_mensuel_vendeur AS (
+WITH payments_agg AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+)
+SELECT  s.seller_id                                     AS vendeur
+       ,date_trunc('month',o.order_purchase_timestamp ) AS mois
+       ,SUM(pa.montant_ca)                              AS montant
+FROM sellers s
+INNER JOIN order_items oi
+ON s.seller_id = oi.seller_id
+INNER JOIN orders o
+ON oi.order_id = o.order_id
+INNER JOIN payments_agg pa
+ON o.order_id = pa.order_id
+GROUP BY  1
+         ,2 ORDER BY  1 )
+SELECT  *
+FROM vue_ca_mensuel_vendeur
+WHERE montant > 10000
+
+/*
+Exercice 30 — Moyenne mobile sur 3 mois
+Calcule, par seller, le chiffre d'affaires mensuel ainsi qu'une moyenne mobile sur 3 mois glissants (mois courant + 2 mois précédents).
+Tables utiles : order_items, orders
+
+Filtre : ne garde que les sellers ayant au moins 5 mois d'activité
+
+Trie : par seller_id, puis par mois croissant
+*/
+
+WITH cte_payment AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+), cte_data_basis AS
+(
+	SELECT  s.seller_id                                    AS vendeur
+	       ,date_trunc('month',o.order_purchase_timestamp) AS mois
+	       ,cp.montant_ca
+	FROM sellers s
+	INNER JOIN order_items oi
+	ON s.seller_id = oi.seller_id
+	INNER JOIN orders o
+	ON oi.order_id = o.order_id
+	INNER JOIN cte_payment cp
+	ON o.order_id = cp.order_id
+), cte_grouping AS
+(
+	SELECT  vendeur
+	       ,mois
+	       ,SUM(montant_ca) AS ca_mensuel
+	FROM cte_data_basis
+	GROUP BY  1
+	         ,2
+), cte_moyenne_mob AS
+(
+	SELECT  *
+	       ,round(AVG(ca_mensuel) over(PARTITION BY vendeur ORDER BY  mois rows BETWEEN 2 preceding AND current row)) AS moyenne_mobile
+	FROM cte_grouping
+)
+SELECT  vendeur
+       ,mois
+       ,ca_mensuel
+       ,moyenne_mobile
+FROM cte_moyenne_mob
+WHERE vendeur IN ( SELECT vendeur FROM cte_grouping GROUP BY 1 HAVING COUNT(distinct mois) >= 5)
+ORDER BY vendeur 
+
+/*
+Exercice 31 — ROWS BETWEEN : cumul avec remise à zéro
+Toujours sur le même thème des window frames, mais on pousse un cran plus loin.
+Calcule, par seller et par année, le CA cumulé depuis le début de l'année (un cumul qui repart à zéro chaque 1er janvier).
+Colonnes attendues :
+
+seller_id
+annee
+mois
+ca_mensuel
+ca_cumule_ytd (Year To Date)
+
+Tables : order_items, orders, order_payments
+
+Filtre : même que l'exercice précédent — sellers avec au moins 5 mois d'activité
+
+Tri : par seller_id, annee, mois
+*/
+
+WITH cte_payment AS
+(
+	SELECT  order_id
+	       ,SUM(payment_value) AS montant_ca
+	FROM order_payments op
+	GROUP BY  1
+	ORDER BY  1
+), cte_data_basis AS
+(
+	SELECT  s.seller_id                                    AS vendeur
+	       ,date_trunc('month',o.order_purchase_timestamp) AS mois
+	       ,cp.montant_ca
+	FROM sellers s
+	INNER JOIN order_items oi
+	ON s.seller_id = oi.seller_id
+	INNER JOIN orders o
+	ON oi.order_id = o.order_id
+	INNER JOIN cte_payment cp
+	ON o.order_id = cp.order_id
+), cte_grouping AS
+(
+	SELECT  vendeur
+	       ,mois
+	       ,SUM(montant_ca) AS ca_mensuel
+	FROM cte_data_basis
+	GROUP BY  1
+	         ,2
+), cte_moyenne_mob AS
+(
+	SELECT  *
+	       ,round(AVG(ca_mensuel) over(PARTITION BY vendeur ORDER BY  mois rows BETWEEN 2 preceding AND current row)) AS moyenne_mobile
+	FROM cte_grouping
+)
+SELECT  vendeur
+       ,mois
+       ,ca_mensuel
+       ,moyenne_mobile
+FROM cte_moyenne_mob
+WHERE vendeur IN ( SELECT vendeur FROM cte_grouping GROUP BY 1 HAVING COUNT(distinct mois) >= 5)
+ORDER BY vendeur
+
+/*
+Exercice 32 : Les dates
+Calcule, pour chaque commande, le délai de livraison en jours entre la date d'achat et la date de livraison effective. Puis donne :
+
+Le délai moyen de livraison par état brésilien (customer_state)
+Le délai maximum
+Le délai minimum
+Le nombre de commandes
+
+Filtre : uniquement les commandes avec un statut delivered
+
+Tri : par délai moyen décroissant
+Tables : orders, customers
+*/
+
+WITH cte_data_found AS
+(
+	SELECT  c.customer_state                AS province
+	       ,o.order_id                      AS commande
+	       ,o.order_purchase_timestamp      AS date_dachat
+	       ,o.order_delivered_customer_date AS date_livraison
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	WHERE o.order_delivered_customer_date is not null
+	AND o.order_status = 'delivered' 
+), cte_livraison AS
+(
+	SELECT  province
+	       ,commande
+	       ,(date_livraison::date - date_dachat::date) AS delai_livraison
+	FROM cte_data_found
+)
+SELECT  province
+       ,COUNT(distinct commande)    AS nbr_commandes
+       ,round(AVG(delai_livraison)) AS delai_moyen
+       ,MIN(delai_livraison)        AS delai_min
+       ,MAX(delai_livraison)        AS delai_max
+FROM cte_livraison
+GROUP BY  cte_livraison.province
+ORDER BY  3 desc
 
 
 
