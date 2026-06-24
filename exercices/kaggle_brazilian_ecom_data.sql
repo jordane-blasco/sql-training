@@ -1481,5 +1481,144 @@ FROM cte_livraison
 GROUP BY  cte_livraison.province
 ORDER BY  3 desc
 
+/*
+Exercice 33 — Dates : délai estimé vs réel
+On reste sur les dates mais on pousse un peu plus loin.
+Calcule, pour chaque commande livrée, l'écart entre la date de livraison estimée et la date de livraison réelle en jours. Un écart négatif signifie que la commande est arrivée en avance, positif qu'elle est arrivée en retard.
+Puis agrège par état (customer_state) :
 
+Nombre de commandes
+Nombre de commandes en retard
+Nombre de commandes en avance
+Taux de commandes en retard (en %)
+Écart moyen en jours (arrondi)
 
+Tables : orders, customers
+
+Filtre : commandes delivered uniquement
+
+Tri : par taux de retard décroissant
+*/
+
+WITH cte_basis AS
+(
+	SELECT  c.customer_state                AS etat
+	       ,o.order_id                      AS commande
+	       ,o.order_estimated_delivery_date AS date_livraison_est
+	       ,o.order_delivered_customer_date AS date_livraison
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	WHERE order_status = 'delivered' 
+), cpt_jours_livraison AS
+(
+	SELECT  etat
+	       ,commande
+	       ,(date_livraison:: date - date_livraison_est::date) AS jours_livraison
+	FROM cte_basis
+)
+SELECT  etat
+       ,COUNT(distinct commande)                                                                              AS nbr_commandes
+       ,SUM(case WHEN jours_livraison < 0 THEN 1 else 0 end)                                                  AS nbr_commandes_en_avance
+       ,SUM(case WHEN jours_livraison > 0 THEN 1 else 0 end)                                                  AS nbr_commandes_en_retard
+       ,round((SUM(case WHEN jours_livraison > 0 THEN 1 else 0 end)::float / COUNT(distinct commande)) * 100) AS pct_commandes_retard
+       ,round(AVG(jours_livraison ))                                                                          AS ecart_moyen
+FROM cpt_jours_livraison
+GROUP BY  1
+ORDER BY  pct_commandes_retard desc
+
+/*
+Exercice 34 — Nested subqueries
+On change de sujet : les sous-requêtes imbriquées. Tu en as déjà utilisé une dans le WHERE ... IN (SELECT ...), mais on va aller plus loin.
+Une sous-requête peut apparaître à trois endroits :
+
+Dans le WHERE — tu connais déjà
+Dans le FROM — comme une table temporaire inline
+Dans le SELECT — pour calculer une valeur scalaire
+
+Exercice :
+Sans utiliser de CTE, trouve les produits dont le prix unitaire moyen est supérieur à la moyenne globale de tous les produits.
+Colonnes attendues :
+
+product_id
+prix_moyen (prix moyen du produit, arrondi)
+moyenne_globale (la moyenne globale, arrondie — même valeur sur toutes les lignes)
+
+Table : order_items
+
+Tri : par prix_moyen décroissant
+*/
+
+SELECT  product_id
+       ,round(AVG(price)) AS prix_moyen
+       ,(
+SELECT  round(AVG(price))
+FROM order_items oi) AS prix_moyen_global
+FROM order_items oi
+GROUP BY  1
+HAVING round(AVG(price)) > (
+SELECT  round(AVG(price))
+FROM order_items oi)
+ORDER BY 2 desc
+
+/*
+Exercice 35 — Sous-requête dans le FROM
+Cette fois on utilise une sous-requête directement dans le FROM comme une table temporaire inline, sans CTE.
+Exercice :
+Trouve les sellers dont le CA total est supérieur à la médiane des CA de tous les sellers.
+Colonnes attendues :
+
+seller_id
+ca_total (arrondi)
+mediane_ca (la médiane globale, arrondie — même valeur sur toutes les lignes)
+
+Table : order_items
+
+Tri : par ca_total décroissant
+Indice : La médiane en PostgreSQL se calcule avec PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY valeur).
+*/
+
+SELECT  seller_id     AS vendeur
+       ,SUM(oi.price) AS ca
+       ,(
+SELECT  PERCENTILE_CONT(0.5) within group(order by ca) AS mediane
+FROM
+(
+	SELECT  seller_id
+	       ,SUM(oi.price) AS ca
+	FROM order_items oi
+	GROUP BY  1
+) AS table_mediane) AS mediane_ca
+FROM order_items oi
+GROUP BY  1
+HAVING SUM(oi.price) > (
+SELECT  PERCENTILE_CONT(0.5) within group(order by ca) AS mediane
+FROM
+(
+	SELECT  seller_id
+	       ,SUM(oi.price) AS ca
+	FROM order_items oi
+	GROUP BY  1
+) AS table_mediane)
+ORDER BY ca desc
+
+-- version avec la cte
+
+WITH ca_agg AS
+(
+	SELECT  seller_id
+	       ,SUM(oi.price) AS ca
+	FROM order_items oi
+	GROUP BY  1
+), cte_mediane AS
+(
+	SELECT  PERCENTILE_CONT(0.5) within group(order by ca) AS mediane
+	FROM ca_agg
+)
+SELECT  seller_id
+       ,ca
+       ,mediane
+FROM ca_agg
+CROSS JOIN cte_mediane
+WHERE ca > mediane
+ORDER BY ca desc
