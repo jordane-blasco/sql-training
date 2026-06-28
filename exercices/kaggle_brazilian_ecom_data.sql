@@ -1622,3 +1622,173 @@ FROM ca_agg
 CROSS JOIN cte_mediane
 WHERE ca > mediane
 ORDER BY ca desc
+
+/*
+Exercice 36 : cross tab
+*/
+
+WITH cte_basis AS
+(
+	SELECT  oi.order_id                      AS commande
+	       ,oi.price                         AS ca
+	       ,o.order_purchase_timestamp       AS date_achat
+	       ,ct.product_category_name_english AS categorie_pdt
+	FROM order_items oi
+	INNER JOIN orders o
+	ON oi.order_id = o.order_id
+	INNER JOIN products p
+	ON oi.product_id = p.product_id
+	INNER JOIN category_translation ct
+	ON p.product_category_name = ct.product_category_name
+), cte_categorie AS
+(
+	SELECT  categorie_pdt
+	       ,SUM(ca) AS montant
+	FROM cte_basis
+	GROUP BY  1
+	ORDER BY  2 DESC
+	LIMIT 5
+), cte_final AS
+(
+	SELECT  date_part('year',date_trunc('year',date_achat)) AS annee
+	       ,cc.categorie_pdt
+	       ,SUM(cb.ca)                                      AS ca
+	FROM cte_basis cb
+	INNER JOIN cte_categorie cc
+	ON cb.categorie_pdt = cc.categorie_pdt AND
+	GROUP BY  1
+	         ,2
+	ORDER BY  annee
+	         ,categorie_pdt
+)
+SELECT  *
+FROM cte_final;
+
+SELECT  *
+FROM crosstab
+( '
+	WITH cte_basis AS (
+	SELECT  oi.order_id                      AS commande
+	       ,oi.price                         AS ca
+	       ,o.order_purchase_timestamp       AS date_achat
+	       ,ct.product_category_name_english AS categorie_pdt
+	FROM order_items oi
+	INNER JOIN orders o
+	ON oi.order_id = o.order_id
+	INNER JOIN products p
+	ON oi.product_id = p.product_id
+	INNER JOIN category_translation ct
+	ON p.product_category_name = ct.product_category_name ), cte_categorie AS (
+	SELECT  categorie_pdt
+	       ,SUM(ca) AS montant
+	FROM cte_basis
+	GROUP BY  1
+	ORDER BY  2 DESC
+	LIMIT 5 ),cte_final AS (
+	SELECT  date_part($$year$$,date_trunc($$year$$,date_achat)) AS annee
+	       ,cc.categorie_pdt
+	       ,SUM(cb.ca)                                          AS ca
+	FROM cte_basis cb
+	INNER JOIN cte_categorie cc
+	ON cb.categorie_pdt = cc.categorie_pdt
+	GROUP BY  1
+	         ,2 ORDER BY  annee
+	         ,categorie_pdt )
+	SELECT  *
+	FROM cte_final', 'SELECT categorie_pdt
+	FROM (
+	SELECT  ct.product_category_name_english AS categorie_pdt
+	       ,SUM(oi.price)                    AS montant
+	FROM order_items oi
+	INNER JOIN products p
+	ON oi.product_id = p.product_id
+	INNER JOIN category_translation ct
+	ON p.product_category_name = ct.product_category_name
+	GROUP BY  1
+	ORDER BY  2 DESC
+	LIMIT 5 ) top5
+	ORDER BY 1'
+) AS résultat( annee numeric, bed_bath_table numeric, computers_accessories numeric, health_beauty numeric, sports_leisure numeric, watches_gifts numeric );
+
+/*
+Exercice 37 — CAST basique
+Sans CTE, écris une requête qui retourne pour chaque commande :
+
+order_id
+order_purchase_timestamp converti en date (sans l'heure)
+Le montant total payé (payment_value) converti en integer (arrondi perdu, troncature)
+Le montant converti en text avec le symbole R$ devant (concaténation)
+
+Table : order_payments, orders
+
+Filtre : 10 premières lignes seulement
+*/
+
+
+/*
+Exercice 38 — Self Join
+Sur la table orders, trouve les clients qui ont passé au moins deux commandes et affiche leurs commandes côte à côte : order_id_1, order_id_2, et le customer_unique_id.
+Passe par customers pour avoir customer_unique_id.
+Petite contrainte : évite les doublons — ne retourne pas à la fois (order_001, order_002) ET (order_002, order_001).
+*/
+
+WITH cte_rang as
+(
+	SELECT  c.customer_unique_id                                                                      AS client
+	       ,o.order_id
+	       ,o.order_purchase_timestamp                                                                AS time
+	       ,ROW_NUMBER() over(PARTITION BY c.customer_unique_id ORDER BY  o.order_purchase_timestamp) AS rang
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	ORDER BY time
+)
+SELECT  o1.client
+       ,o1.order_id
+       ,o2.order_id
+FROM cte_rang o1
+JOIN cte_rang o2
+ON o1.client = o2.client AND o1.rang < o2.rang
+
+/*
+Exercice 10 — Rétention
+Sur Olist, trouve les clients qui ont passé une commande et qui sont revenus passer une autre commande dans les 14 jours suivants.
+Retourne le customer_unique_id, la date de la première commande, la date de la commande de retour, et le nombre de jours entre les deux.
+*/
+
+
+WITH cte_basis AS
+(
+	SELECT  date_trunc('day',o.order_purchase_timestamp) AS jours
+	       ,c.customer_unique_id                         AS clients
+	       ,o.order_id
+	FROM orders o
+	INNER JOIN customers c
+	ON o.customer_id = c.customer_id
+	ORDER BY 1
+), cte_rang AS
+(
+	SELECT  *
+	       ,rank() over(PARTITION BY clients ORDER BY  jours) AS classement
+	FROM cte_basis
+), cte_retention AS
+(
+	SELECT  cr1.jours      AS jours1
+	       ,cr1.clients    AS clients1
+	       ,cr1.classement cl1
+	       ,cr2.jours      AS jours2
+	       ,cr2.clients    AS cl1
+	       ,cr2.classement AS cl2
+	FROM cte_rang cr1
+	JOIN cte_rang cr2
+	ON cr1.clients = cr2.clients AND cr1.classement < cr2.classement
+), cte_date_diff AS
+(
+	SELECT  clients1
+	       ,(jours2:: date - jours1::date)as date_difference
+	FROM cte_retention
+)
+SELECT  *
+FROM cte_date_diff
+WHERE date_difference BETWEEN 1 AND 14
+
